@@ -2,14 +2,14 @@
 
 A standalone ESP32-C3 device that monitors the Israeli Home Front Command (Pikud HaOref) alert API in real time and provides visual feedback via a NeoPixel LED strip and a MAX7219 32×8 dot matrix display — no Home Assistant required.
 
-![Device](images/device.jpg)
+![Device](images/display_safe.jpg)
 
 ---
 
 ## Features
 
 - Connects to the Pikud HaOref live alert API every 3 seconds
-- Filters alerts by city name (configurable)
+- Filters alerts by city name (configurable via captive portal)
 - NeoPixel LED strip changes color based on alert state
 - MAX7219 32×8 matrix displays status text
 - Captive Portal (WiFiManager) for easy WiFi setup and city configuration — no code changes needed
@@ -27,11 +27,28 @@ A standalone ESP32-C3 device that monitors the Israeli Home Front Command (Pikud
 
 ---
 
+## Photos
+
+### Assembled Device — SAFE State
+![Display showing SAFE](images/display_safe.jpg)
+*MAX7219 matrix displaying "SAFE" with NeoPixel LEDs above*
+
+### Enclosure
+![3D printed enclosure](images/enclosure.jpg)
+*3D printed case with NeoPixel strip along the bottom edge*
+
+### Internals
+![Inside the enclosure](images/internals.jpg)
+*Wiring inside the enclosure — ESP32-C3, NeoPixel strip, and power connections*
+
+---
+
 ## Hardware
 
 - **ESP32-C3 SuperMini** (or compatible)
 - **WS2812B NeoPixel** LED strip (12 LEDs)
 - **MAX7219 32×8** dot matrix display (4× 8×8 modules)
+- 3D printed enclosure
 
 ---
 
@@ -67,7 +84,7 @@ A standalone ESP32-C3 device that monitors the Israeli Home Front Command (Pikud
 4. The captive portal opens automatically — select your WiFi and enter your city name in Hebrew (e.g. `רמת השרון`)
 5. Save — the device connects and begins monitoring
 
-To reconfigure: hold reset or erase flash, then repeat the steps above.
+To reconfigure: erase flash, then repeat the steps above.
 
 ---
 
@@ -121,16 +138,6 @@ Live alert data is provided by the **Israeli Home Front Command (Pikud HaOref)**
 
 - API Endpoint: `https://www.oref.org.il/warningMessages/alert/Alerts.json`
 - For a full Home Assistant integration using the same API, see [amitfin/oref_alert](https://github.com/amitfin/oref_alert)
-
----
-
-## Images
-
-<!-- Add photos to the /images folder and they will appear here -->
-
-| Setup | In Action |
-|-------|-----------|
-| ![Setup](images/setup.jpg) | ![In Action](images/in_action.jpg) |
 
 ---
 
