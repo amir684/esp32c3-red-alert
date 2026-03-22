@@ -18,7 +18,7 @@
 #define MAX_CS_PIN      5     // GPIO5  -> MAX7219 CS
 #define MAX_DEVICES     4     // 4 x 8x8 modules = 32x8
 
-#define BUTTON_PIN      9     // GPIO9  -> BOOT button (built-in)
+#define BUTTON_PIN      3     // GPIO3  -> config button (external, connect to GND)
 #define LONG_PRESS_MS   3000  // 3 seconds to trigger portal
 
 // ===================== CONSTANTS =====================
