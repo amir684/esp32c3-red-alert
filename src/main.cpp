@@ -18,14 +18,16 @@
 #define MAX_CS_PIN      5     // GPIO5  -> MAX7219 CS
 #define MAX_DEVICES     4     // 4 x 8x8 modules = 32x8
 
-#define BUTTON_PIN      3     // GPIO3  -> config button (external, connect to GND)
-#define LONG_PRESS_MS   3000  // 3 seconds to trigger portal
+#define BUTTON_PIN      3     // GPIO3  -> config button (connect to GND)
+#define LONG_PRESS_MS   3000
 
 // ===================== CONSTANTS =====================
 #define ALERT_URL       "https://www.oref.org.il/warningMessages/alert/Alerts.json"
+#define CITIES_URL      "https://alerts-history.oref.org.il/Shared/Ajax/GetCitiesMix.aspx"
 #define CHECK_INTERVAL  3000UL
 #define CAT_PRE_ALARM   10
-#define SAFE_TIMEOUT_MS (20UL * 60 * 1000)   // 20 minutes
+#define SAFE_TIMEOUT_MS (20UL * 60 * 1000)
+#define API_FAIL_MAX    5     // consecutive failures before NO API shown
 
 // ===================== OBJECTS =====================
 Adafruit_NeoPixel pixel(NEOPIXEL_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
@@ -33,19 +35,23 @@ MD_Parola matrix(MD_MAX72XX::FC16_HW, MAX_DIN_PIN, MAX_CLK_PIN, MAX_CS_PIN, MAX_
 Preferences preferences;
 
 // ===================== STATE =====================
-enum AlertState { SAFE, PRE_ALARM, ALARM, UNSAFE };
+enum AlertState { SAFE, PRE_ALARM, ALARM, UNSAFE, NO_API, BAD_CITY };
 
-// Shared between tasks — protected by mutex
+// Alert state — shared between tasks, protected by mutex
 volatile AlertState currentState = SAFE;
 SemaphoreHandle_t   stateMutex;
 
+// Error flags — written by setup/alertTask, read by loop
+volatile int  apiFailCount = 0;
+volatile bool cityValid    = true;
+
 String cityName = "רמת השרון";
 
-// Flicker state for ALARM (used only in loop task)
-unsigned long lastBlink   = 0;
-bool          blinkOn     = false;
+// Flicker / blink state (loop task only)
+unsigned long lastBlink = 0;
+bool          blinkOn   = false;
 
-// Last time our city appeared in an active alert (for safety timeout)
+// Last time our city appeared in an active alert (safety timeout)
 unsigned long lastAlertTime = 0;
 
 // ===================== URL DECODE =====================
@@ -90,32 +96,64 @@ void showScroll(const char* text) {
 // ===================== APPLY STATE =====================
 // Must be called from loop task only (SPI/NeoPixel not thread-safe)
 void applyState(AlertState state) {
+    blinkOn = false;
     switch (state) {
         case SAFE:
-            setColor(0, 80, 0);
+            setColor(0, 80, 0);         // Green solid
             showStatic("SAFE");
             break;
 
         case PRE_ALARM:
-            setColor(255, 80, 0);
+            setColor(255, 80, 0);       // Orange solid
             showScroll("PRE ALARM");
             break;
 
         case ALARM:
             blinkOn = true;
-            setColor(80, 0, 0);
+            setColor(80, 0, 0);         // Red flicker (handled in loop)
             showStatic("ALARM");
             break;
 
         case UNSAFE:
-            blinkOn = false;
-            setColor(80, 0, 0);
+            setColor(80, 0, 0);         // Red solid
             showStatic("UNSAFE");
+            break;
+
+        case NO_API:
+            blinkOn = true;
+            setColor(0, 0, 80);         // Blue blink (handled in loop)
+            showScroll("NO API");
+            break;
+
+        case BAD_CITY:
+            setColor(80, 0, 80);        // Magenta solid
+            showScroll("BAD CITY");
             break;
     }
 }
 
-// ===================== CHECK ALERTS (runs in separate task) =====================
+// ===================== CITY VALIDATION =====================
+// Called once in setup after WiFi connects — checks city against oref cities list
+bool validateCity(const String& city) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    if (!http.begin(client, CITIES_URL)) return false;
+    http.setTimeout(8000);
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        http.end();
+        Serial.printf("[City] validation HTTP error: %d\n", code);
+        return true;   // assume valid if we can't reach the endpoint
+    }
+    String body = http.getString();
+    http.end();
+    bool found = body.indexOf(city) >= 0;
+    Serial.printf("[City] '%s' %s\n", city.c_str(), found ? "valid" : "NOT FOUND");
+    return found;
+}
+
+// ===================== ALERT TASK (core 0) =====================
 void alertTask(void* param) {
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(CHECK_INTERVAL));
@@ -126,7 +164,10 @@ void alertTask(void* param) {
         client.setInsecure();
 
         HTTPClient http;
-        if (!http.begin(client, ALERT_URL)) continue;
+        if (!http.begin(client, ALERT_URL)) {
+            apiFailCount++;
+            continue;
+        }
 
         http.addHeader("Referer",          "https://www.oref.org.il/");
         http.addHeader("X-Requested-With", "XMLHttpRequest");
@@ -141,12 +182,11 @@ void alertTask(void* param) {
 
         AlertState newState = cur;
 
-        Serial.printf("[HTTP] code=%d\n", code);
-
         if (code == HTTP_CODE_OK) {
+            apiFailCount = 0;   // reset failure counter on success
+
             String payload = http.getString();
             payload.trim();
-            Serial.printf("[HTTP] payload len=%d\n", payload.length());
 
             // Strip UTF-8 BOM
             if (payload.length() >= 3 &&
@@ -160,9 +200,7 @@ void alertTask(void* param) {
                 JsonDocument doc;
                 DeserializationError err = deserializeJson(doc, payload);
 
-                if (err) {
-                    Serial.printf("[JSON] parse error: %s\n", err.c_str());
-                } else {
+                if (!err) {
                     int cat = atoi(doc["cat"].as<const char*>() ?: "0");
                     String title = doc["title"].as<String>();
                     Serial.printf("[JSON] cat=%d title=%s\n", cat, title.c_str());
@@ -182,32 +220,31 @@ void alertTask(void* param) {
                     if (isEndOfEvent) {
                         if (cityFound) {
                             newState = SAFE;
-                            Serial.println("[Alert] end-of-event for our city -> SAFE");
-                        } else {
-                            Serial.println("[Alert] end-of-event for other cities, ignoring");
+                            Serial.println("[Alert] end-of-event -> SAFE");
                         }
                     } else {
                         if (cityFound) {
                             newState = (cat == CAT_PRE_ALARM) ? PRE_ALARM : ALARM;
                             lastAlertTime = millis();
-                            Serial.printf("[Match] city found! cat=%d -> %s\n", cat,
+                            Serial.printf("[Match] cat=%d -> %s\n", cat,
                                 newState == PRE_ALARM ? "PRE_ALARM" : "ALARM");
                         } else if (cur == ALARM) {
                             newState = UNSAFE;
                             Serial.println("[Alert] ALARM ended -> UNSAFE");
                         }
                     }
+                } else {
+                    Serial.printf("[JSON] parse error: %s\n", err.c_str());
                 }
             } else {
                 if (cur == ALARM) {
                     newState = UNSAFE;
                     Serial.println("[HTTP] empty + was ALARM -> UNSAFE");
-                } else {
-                    Serial.println("[HTTP] empty, holding state");
                 }
             }
         } else {
-            Serial.printf("[HTTP] error: %s\n", http.errorToString(code).c_str());
+            apiFailCount++;
+            Serial.printf("[HTTP] error %d (fail count: %d)\n", code, (int)apiFailCount);
         }
         http.end();
 
@@ -235,7 +272,6 @@ void setup() {
 
     stateMutex = xSemaphoreCreateMutex();
 
-    // --- Button init ---
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     // --- NeoPixel init ---
@@ -250,7 +286,8 @@ void setup() {
 
     // --- Load saved city ---
     preferences.begin("redalert", true);
-    String saved = preferences.getString("city", "");
+    String saved     = preferences.getString("city", "");
+    bool forcePortal = preferences.getBool("portal", false);
     preferences.end();
     if (saved.length() > 0) cityName = saved;
     Serial.printf("[Setup] City: %s\n", cityName.c_str());
@@ -274,10 +311,6 @@ void setup() {
         }
     });
 
-    // Check if portal was requested by long press
-    preferences.begin("redalert", true);
-    bool forcePortal = preferences.getBool("portal", false);
-    preferences.end();
     if (forcePortal) {
         preferences.begin("redalert", false);
         preferences.putBool("portal", false);
@@ -298,29 +331,37 @@ void setup() {
     }
 
     Serial.printf("[Setup] WiFi OK. IP: %s\n", WiFi.localIP().toString().c_str());
+
+    // --- Validate city name ---
+    showStatic("CHECK");
+    cityValid = validateCity(cityName);
+    if (!cityValid) {
+        Serial.println("[Setup] City not found in oref list!");
+    }
+
     setColor(0, 80, 0);
     showStatic("OK!");
     delay(1500);
 
-    applyState(SAFE);
+    applyState(cityValid ? SAFE : BAD_CITY);
 
-    // Start alert polling task on core 0 (loop runs on core 1)
+    // Start alert task on core 0
     xTaskCreatePinnedToCore(alertTask, "alertTask", 8192, nullptr, 1, nullptr, 0);
 }
 
-// ===================== LOOP (runs on core 1) =====================
-AlertState    lastAppliedState = SAFE;
+// ===================== LOOP (core 1) =====================
+AlertState    lastDisplayState = SAFE;
 unsigned long btnPressTime     = 0;
 bool          btnWasPressed    = false;
 
 void loop() {
-    // --- Long press button: trigger config portal ---
+    // --- Long press: trigger config portal ---
     bool btnPressed = (digitalRead(BUTTON_PIN) == LOW);
     if (btnPressed && !btnWasPressed) {
-        btnPressTime   = millis();
-        btnWasPressed  = true;
+        btnPressTime  = millis();
+        btnWasPressed = true;
     } else if (!btnPressed) {
-        btnWasPressed  = false;
+        btnWasPressed = false;
     } else if (btnPressed && millis() - btnPressTime >= LONG_PRESS_MS) {
         Serial.println("[Button] Long press -> portal on next boot");
         preferences.begin("redalert", false);
@@ -329,26 +370,43 @@ void loop() {
         ESP.restart();
     }
 
-    // Read current state safely
+    // --- Compute display state ---
     xSemaphoreTake(stateMutex, portMAX_DELAY);
-    AlertState state = currentState;
+    AlertState alertSt = currentState;
     xSemaphoreGive(stateMutex);
 
-    // Apply state change to display/LED when state changes
-    if (state != lastAppliedState) {
-        lastAppliedState = state;
-        applyState(state);
+    AlertState displaySt;
+    if (alertSt == SAFE) {
+        if (apiFailCount >= API_FAIL_MAX) displaySt = NO_API;
+        else if (!cityValid)             displaySt = BAD_CITY;
+        else                             displaySt = SAFE;
+    } else {
+        displaySt = alertSt;   // alert states always take priority
     }
 
-    // Drive matrix animation — loop scroll only for PRE ALARM
-    if (matrix.displayAnimate() && state == PRE_ALARM) {
+    // --- Apply when display changes ---
+    if (displaySt != lastDisplayState) {
+        lastDisplayState = displaySt;
+        applyState(displaySt);
+    }
+
+    // --- Matrix animation ---
+    bool scrolling = (displaySt == PRE_ALARM || displaySt == NO_API || displaySt == BAD_CITY);
+    if (matrix.displayAnimate() && scrolling) {
         matrix.displayReset();
     }
 
-    // Fast flicker NeoPixel red only during active ALARM
-    if (state == ALARM && millis() - lastBlink >= 60) {
+    // --- LED effects ---
+    // Fast flicker: ALARM
+    if (displaySt == ALARM && millis() - lastBlink >= 60) {
         lastBlink = millis();
         blinkOn = !blinkOn;
         blinkOn ? setColor(80, 0, 0) : setColor(0, 0, 0);
+    }
+    // Slow blink: NO_API
+    if (displaySt == NO_API && millis() - lastBlink >= 600) {
+        lastBlink = millis();
+        blinkOn = !blinkOn;
+        blinkOn ? setColor(0, 0, 80) : setColor(0, 0, 0);
     }
 }
