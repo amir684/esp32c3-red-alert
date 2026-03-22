@@ -37,6 +37,10 @@ A standalone ESP32-C3 device that monitors the Israeli Home Front Command (Pikud
 ![3D printed enclosure](images/enclosure.jpg)
 *3D printed case with NeoPixel strip along the bottom edge*
 
+### Pre-Alarm State
+![PRE ALARM scrolling on matrix](images/prealarm.jpg)
+*"PRE ALARM" scrolling on the matrix — rockets expected in the area within minutes*
+
 ### Internals
 ![Inside the enclosure](images/internals.jpg)
 *Wiring inside the enclosure — ESP32-C3, NeoPixel strip, and power connections*
