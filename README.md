@@ -84,11 +84,23 @@ A standalone ESP32-C3 device that monitors the Israeli Home Front Command (Pikud
 
 1. Power on the device — LED turns **blue**
 2. If no WiFi is saved, an access point named **`RedAlert-Setup`** is created
-3. Connect from any phone or computer
-4. The captive portal opens automatically — select your WiFi and enter your city name in Hebrew (e.g. `רמת השרון`)
-5. Save — the device connects and begins monitoring
+3. Connect from any phone or computer — the captive portal opens automatically
+4. Tap **Configure WiFi**, select your network, enter the password and your city name in Hebrew (e.g. `רמת השרון`)
+5. Tap **Save** — the device connects and begins monitoring
 
-To reconfigure: erase flash, then repeat the steps above.
+| Portal main screen | WiFi & city configuration |
+|---|---|
+| ![Portal main](images/portal_main.jpg) | ![Portal config](images/portal_wifi.jpg) |
+
+---
+
+## Reconfiguring WiFi or City
+
+A physical config button is connected between **GPIO3** and **GND**.
+
+**Hold the button for 3 seconds** → the device restarts and opens the `RedAlert-Setup` portal again, where you can change the WiFi network or city name without reflashing.
+
+The matrix displays `CONFIG` during this mode.
 
 ---
 
