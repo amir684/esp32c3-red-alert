@@ -147,4 +147,4 @@ Live alert data is provided by the **Israeli Home Front Command (Pikud HaOref)**
 
 ## License
 
-MIT
+Licensed under the [Apache License 2.0](LICENSE).
