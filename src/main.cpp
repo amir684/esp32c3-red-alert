@@ -35,12 +35,12 @@ AlertState currentState = SAFE;
 String cityName = "רמת השרון";   // default — overridden by saved value
 
 // Flicker state for UNSAFE
-unsigned long lastBlink   = 0;
-bool          blinkOn     = false;
+unsigned long lastBlink     = 0;
+bool          blinkOn       = false;
 
-// Consecutive SAFE readings required before reverting to SAFE state
-int safeConfirmCount = 0;
-#define SAFE_CONFIRM_NEEDED 3
+// Last time our city appeared in an active alert (for safety timeout)
+unsigned long lastAlertTime = 0;
+#define SAFE_TIMEOUT_MS     (20UL * 60 * 1000)   // 20 minutes
 
 // ===================== URL DECODE =====================
 // WiFiManager may return the Hebrew input URL-encoded (%D7%A8...)
@@ -119,7 +119,9 @@ void checkAlerts() {
     http.setTimeout(8000);
 
     int code = http.GET();
-    AlertState newState = SAFE;
+
+    // Default: stay in current state — only explicit signals change the state
+    AlertState newState = currentState;
 
     Serial.printf("[HTTP] code=%d\n", code);
 
@@ -127,7 +129,6 @@ void checkAlerts() {
         String payload = http.getString();
         payload.trim();
         Serial.printf("[HTTP] payload len=%d\n", payload.length());
-        Serial.println(payload);
 
         // Strip UTF-8 BOM (0xEF 0xBB 0xBF) — oref API includes it
         if (payload.length() >= 3 &&
@@ -144,44 +145,54 @@ void checkAlerts() {
             if (err) {
                 Serial.printf("[JSON] parse error: %s\n", err.c_str());
             } else {
-                // cat comes as a string ("10") not int — convert explicitly
                 int cat = atoi(doc["cat"].as<const char*>() ?: "0");
                 String title = doc["title"].as<String>();
                 Serial.printf("[JSON] cat=%d title=%s\n", cat, title.c_str());
 
-                // "האירוע הסתיים" = end-of-event, treat as SAFE regardless of cat
                 bool isEndOfEvent = title.indexOf("הסתיים") >= 0;
+                JsonArray data = doc["data"].as<JsonArray>();
 
-                if (!isEndOfEvent) {
-                    JsonArray data = doc["data"].as<JsonArray>();
-                    for (JsonVariant v : data) {
-                        String area = v.as<String>();
-                        Serial.printf("[JSON] area: %s\n", area.c_str());
-                        if (area.indexOf(cityName) >= 0 || cityName.indexOf(area) >= 0) {
-                            newState = (cat == CAT_PRE_ALARM) ? PRE_ALARM : UNSAFE;
-                            Serial.printf("[Match] city found! cat=%d\n", cat);
-                            break;
-                        }
+                bool cityFound = false;
+                for (JsonVariant v : data) {
+                    String area = v.as<String>();
+                    if (area.indexOf(cityName) >= 0 || cityName.indexOf(area) >= 0) {
+                        cityFound = true;
+                        break;
+                    }
+                }
+
+                if (isEndOfEvent) {
+                    // "האירוע הסתיים" + our city in list → SAFE
+                    if (cityFound) {
+                        newState = SAFE;
+                        Serial.println("[Alert] end-of-event for our city -> SAFE");
+                    } else {
+                        Serial.println("[Alert] end-of-event for other cities, ignoring");
                     }
                 } else {
-                    Serial.println("[JSON] end-of-event message, ignoring");
+                    // Active alert
+                    if (cityFound) {
+                        newState = (cat == CAT_PRE_ALARM) ? PRE_ALARM : UNSAFE;
+                        lastAlertTime = millis();
+                        Serial.printf("[Match] city found! cat=%d -> %s\n", cat,
+                            newState == PRE_ALARM ? "PRE_ALARM" : "UNSAFE");
+                    }
+                    // City not in list → stay in current state (no change)
                 }
             }
         } else {
-            Serial.println("[HTTP] empty response = no active alerts");
+            // Empty response → stay in current state (alarm may still be active)
+            Serial.println("[HTTP] empty response, holding current state");
         }
     } else {
         Serial.printf("[HTTP] error: %s\n", http.errorToString(code).c_str());
     }
     http.end();
 
-    // Require 3 consecutive SAFE readings before leaving alert state
-    if (newState == SAFE && currentState != SAFE) {
-        safeConfirmCount++;
-        Serial.printf("[Alert] SAFE confirm %d/%d\n", safeConfirmCount, SAFE_CONFIRM_NEEDED);
-        if (safeConfirmCount < SAFE_CONFIRM_NEEDED) return;
-    } else {
-        safeConfirmCount = 0;
+    // Safety timeout: stuck in alert for 20 min with no city match → force SAFE
+    if (currentState != SAFE && millis() - lastAlertTime > SAFE_TIMEOUT_MS) {
+        newState = SAFE;
+        Serial.println("[Alert] safety timeout -> SAFE");
     }
 
     if (newState != currentState) {
