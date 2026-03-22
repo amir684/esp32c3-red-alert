@@ -110,7 +110,7 @@ All settings are stored in flash and survive power cycles.
 
 | Parameter | Default | Where to change |
 |-----------|---------|-----------------|
-| City name | `רמת השרון` | Captive Portal |
+| City name | `תל אביב` | Captive Portal |
 | LED count | 12 | `NEOPIXEL_COUNT` in `main.cpp` |
 | LED brightness | 200 (0–255) | `pixel.setBrightness()` in `main.cpp` |
 | Matrix brightness | 5 (0–15) | `matrix.setIntensity()` in `main.cpp` |
