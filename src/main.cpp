@@ -18,6 +18,9 @@
 #define MAX_CS_PIN      5     // GPIO5  -> MAX7219 CS
 #define MAX_DEVICES     4     // 4 x 8x8 modules = 32x8
 
+#define BUTTON_PIN      9     // GPIO9  -> BOOT button (built-in)
+#define LONG_PRESS_MS   3000  // 3 seconds to trigger portal
+
 // ===================== CONSTANTS =====================
 #define ALERT_URL       "https://www.oref.org.il/warningMessages/alert/Alerts.json"
 #define CHECK_INTERVAL  3000UL
@@ -232,6 +235,9 @@ void setup() {
 
     stateMutex = xSemaphoreCreateMutex();
 
+    // --- Button init ---
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+
     // --- NeoPixel init ---
     pixel.begin();
     pixel.setBrightness(200);
@@ -268,10 +274,25 @@ void setup() {
         }
     });
 
-    showStatic("WiFi");
+    // Check if portal was requested by long press
+    preferences.begin("redalert", true);
+    bool forcePortal = preferences.getBool("portal", false);
+    preferences.end();
+    if (forcePortal) {
+        preferences.begin("redalert", false);
+        preferences.putBool("portal", false);
+        preferences.end();
+        Serial.println("[Setup] Portal requested by button");
+    }
+
+    showStatic(forcePortal ? "CONFIG" : "WiFi");
     wm.setConfigPortalTimeout(180);
 
-    if (!wm.autoConnect("RedAlert-Setup")) {
+    bool connected = forcePortal
+        ? wm.startConfigPortal("RedAlert-Setup")
+        : wm.autoConnect("RedAlert-Setup");
+
+    if (!connected) {
         Serial.println("[Setup] Portal timeout — restarting");
         ESP.restart();
     }
@@ -288,9 +309,26 @@ void setup() {
 }
 
 // ===================== LOOP (runs on core 1) =====================
-AlertState lastAppliedState = SAFE;
+AlertState    lastAppliedState = SAFE;
+unsigned long btnPressTime     = 0;
+bool          btnWasPressed    = false;
 
 void loop() {
+    // --- Long press button: trigger config portal ---
+    bool btnPressed = (digitalRead(BUTTON_PIN) == LOW);
+    if (btnPressed && !btnWasPressed) {
+        btnPressTime   = millis();
+        btnWasPressed  = true;
+    } else if (!btnPressed) {
+        btnWasPressed  = false;
+    } else if (btnPressed && millis() - btnPressTime >= LONG_PRESS_MS) {
+        Serial.println("[Button] Long press -> portal on next boot");
+        preferences.begin("redalert", false);
+        preferences.putBool("portal", true);
+        preferences.end();
+        ESP.restart();
+    }
+
     // Read current state safely
     xSemaphoreTake(stateMutex, portMAX_DELAY);
     AlertState state = currentState;
