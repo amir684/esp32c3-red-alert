@@ -29,7 +29,7 @@ MD_Parola matrix(MD_MAX72XX::FC16_HW, MAX_DIN_PIN, MAX_CLK_PIN, MAX_CS_PIN, MAX_
 Preferences preferences;
 
 // ===================== STATE =====================
-enum AlertState { SAFE, PRE_ALARM, UNSAFE };
+enum AlertState { SAFE, PRE_ALARM, ALARM, UNSAFE };
 AlertState currentState = SAFE;
 
 String cityName = "רמת השרון";   // default — overridden by saved value
@@ -95,9 +95,15 @@ void applyState(AlertState state) {
             showScroll("PRE ALARM");
             break;
 
-        case UNSAFE:
+        case ALARM:
             blinkOn = true;
-            setColor(80, 0, 0);       // Red (flicker handled in loop)
+            setColor(80, 0, 0);       // Red flicker handled in loop
+            showStatic("ALARM");
+            break;
+
+        case UNSAFE:
+            blinkOn = false;
+            setColor(80, 0, 0);       // Red solid
             showStatic("UNSAFE");
             break;
     }
@@ -172,17 +178,27 @@ void checkAlerts() {
                 } else {
                     // Active alert
                     if (cityFound) {
-                        newState = (cat == CAT_PRE_ALARM) ? PRE_ALARM : UNSAFE;
+                        newState = (cat == CAT_PRE_ALARM) ? PRE_ALARM : ALARM;
                         lastAlertTime = millis();
                         Serial.printf("[Match] city found! cat=%d -> %s\n", cat,
-                            newState == PRE_ALARM ? "PRE_ALARM" : "UNSAFE");
+                            newState == PRE_ALARM ? "PRE_ALARM" : "ALARM");
+                    }
+                    // City not in list + currently ALARM → downgrade to UNSAFE (alarm ended)
+                    else if (currentState == ALARM) {
+                        newState = UNSAFE;
+                        Serial.println("[Alert] ALARM ended -> UNSAFE");
                     }
                     // City not in list → stay in current state (no change)
                 }
             }
         } else {
-            // Empty response → stay in current state (alarm may still be active)
-            Serial.println("[HTTP] empty response, holding current state");
+            // Empty response: if currently ALARM → downgrade to UNSAFE, else hold
+            if (currentState == ALARM) {
+                newState = UNSAFE;
+                Serial.println("[HTTP] empty + was ALARM -> UNSAFE");
+            } else {
+                Serial.println("[HTTP] empty response, holding current state");
+            }
         }
     } else {
         Serial.printf("[HTTP] error: %s\n", http.errorToString(code).c_str());
@@ -200,7 +216,8 @@ void checkAlerts() {
         applyState(currentState);
         Serial.printf("[Alert] State -> %s\n",
             currentState == SAFE      ? "SAFE"      :
-            currentState == PRE_ALARM ? "PRE_ALARM" : "UNSAFE");
+            currentState == PRE_ALARM ? "PRE_ALARM" :
+            currentState == ALARM     ? "ALARM"     : "UNSAFE");
     }
 }
 
@@ -270,8 +287,8 @@ void loop() {
         matrix.displayReset();
     }
 
-    // Fast flicker NeoPixel red when UNSAFE
-    if (currentState == UNSAFE && millis() - lastBlink >= 60) {
+    // Fast flicker NeoPixel red only during active ALARM
+    if (currentState == ALARM && millis() - lastBlink >= 60) {
         lastBlink = millis();
         blinkOn = !blinkOn;
         blinkOn ? setColor(80, 0, 0) : setColor(0, 0, 0);
