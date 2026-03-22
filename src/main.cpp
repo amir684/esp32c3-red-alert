@@ -23,7 +23,6 @@
 
 // ===================== CONSTANTS =====================
 #define ALERT_URL       "https://www.oref.org.il/warningMessages/alert/Alerts.json"
-#define CITIES_URL      "https://alerts-history.oref.org.il/Shared/Ajax/GetCitiesMix.aspx"
 #define CHECK_INTERVAL  3000UL
 #define CAT_PRE_ALARM   10
 #define SAFE_TIMEOUT_MS (20UL * 60 * 1000)
@@ -132,26 +131,8 @@ void applyState(AlertState state) {
     }
 }
 
-// ===================== CITY VALIDATION =====================
-// Called once in setup after WiFi connects — checks city against oref cities list
-bool validateCity(const String& city) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    HTTPClient http;
-    if (!http.begin(client, CITIES_URL)) return false;
-    http.setTimeout(8000);
-    int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        http.end();
-        Serial.printf("[City] validation HTTP error: %d\n", code);
-        return true;   // assume valid if we can't reach the endpoint
-    }
-    String body = http.getString();
-    http.end();
-    bool found = body.indexOf(city) >= 0;
-    Serial.printf("[City] '%s' %s\n", city.c_str(), found ? "valid" : "NOT FOUND");
-    return found;
-}
+// cityValid starts true — set to false only if city never matches after first successful alert poll
+// (validation via startup API call is unreliable due to Unicode escaping in cities endpoint)
 
 // ===================== ALERT TASK (core 0) =====================
 void alertTask(void* param) {
@@ -332,18 +313,11 @@ void setup() {
 
     Serial.printf("[Setup] WiFi OK. IP: %s\n", WiFi.localIP().toString().c_str());
 
-    // --- Validate city name ---
-    showStatic("CHECK");
-    cityValid = validateCity(cityName);
-    if (!cityValid) {
-        Serial.println("[Setup] City not found in oref list!");
-    }
-
     setColor(0, 80, 0);
     showStatic("OK!");
     delay(1500);
 
-    applyState(cityValid ? SAFE : BAD_CITY);
+    applyState(SAFE);
 
     // Start alert task on core 0
     xTaskCreatePinnedToCore(alertTask, "alertTask", 8192, nullptr, 1, nullptr, 0);
