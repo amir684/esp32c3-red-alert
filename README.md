@@ -76,6 +76,15 @@ A standalone ESP32-C3 device that monitors the Israeli Home Front Command (Pikud
 | GND         | GND           |
 | DIN         | GPIO2         |
 
+### Config Button
+
+| Button Pin | ESP32-C3      |
+|------------|---------------|
+| Side A     | GPIO3         |
+| Side B     | GND           |
+
+> No pull-up resistor needed — the internal pull-up is enabled in firmware.
+
 > **Note:** The ESP32-C3 outputs 3.3V logic. MAX7219 at 5V expects a minimum 3.5V high signal — in practice this works, but a level shifter on DIN/CLK/CS can improve reliability.
 
 ---
